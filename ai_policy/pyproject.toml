@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tennis-ai-opponent-policy"
+version = "0.1.0"
+description = "Phase 1 behavioral cloning policy for the tennis kinematics simulator."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+torch = ["torch>=2.2"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tennis_policy*"]
+

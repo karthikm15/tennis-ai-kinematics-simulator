@@ -11,6 +11,11 @@ node_modules
 dist
 dist-ssr
 *.local
+__pycache__/
+*.pyc
+ai_policy/artifacts/
+ai_policy/data/raw/
+ai_policy/data/processed/
 
 # Editor directories and files
 .vscode/*
