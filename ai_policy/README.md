@@ -71,7 +71,8 @@ PYTHONPATH=ai_policy python3 -m tennis_policy.training.evaluate_baseline \
   --input ai_policy/data/processed/mcp_rallies.jsonl \
   --kind markov \
   --order 2 \
-  --eval-bucket 9
+  --eval-bucket 9 \
+  --csv-out ai_policy/artifacts/baseline_eval.csv
 ```
 
 The raw MCP data and generated processed files are ignored by git.
