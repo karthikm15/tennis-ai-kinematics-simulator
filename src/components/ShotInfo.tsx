@@ -15,6 +15,7 @@ const REASON_SHORT: Record<ValidationReason, string> = {
 
 const PHASE_LABEL: Record<GamePhase, { text: string; color: string }> = {
   ai_hitting:     { text: 'AI hitting',    color: '#cc3838' },
+  awaiting_serve: { text: 'Your serve',    color: '#4ade80' },
   awaiting_input: { text: 'Your turn',     color: '#4ade80' },
   player_hitting: { text: 'Ball in flight', color: '#2870d8' },
   point_over:     { text: 'Point over',    color: '#f59e0b' },

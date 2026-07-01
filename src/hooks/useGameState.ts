@@ -1,8 +1,24 @@
-import { useReducer, useEffect, useRef } from 'react';
-import { GameState, GamePhase, Shot, ShotValidation, Vec2, ShotRecord } from '../types';
-import { validateReturn, canReach, reachablePos, PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS } from '../engine/kinematics';
-import { generateAiShot, defaultAiPos, defaultPlayerPos } from '../engine/ai';
+import { useReducer, useEffect, useRef, useState } from 'react';
+import { GameState, GamePhase, Shot, ShotValidation, Vec2, ShotRecord, ValidationReason } from '../types';
+import {
+  validateReturn, validateServe,
+  canReach, reachablePos,
+  checkNetClearance,
+  PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS,
+} from '../engine/kinematics';
+import { generateAiShot, generateAiServe, defaultAiPos, defaultPlayerPos } from '../engine/ai';
 import { canvasClickToCourt } from '../engine/court';
+import { initRLAgent, rlAgentShot, resetRLFrameBuffer } from '../engine/rl_agent';
+
+// Module-level flag: flips to true once weights are fetched
+let _rlReady = false;
+
+function _getAiShot(aiPos: Vec2, playerPos: Vec2, lastBall: Vec2): Shot {
+  if (_rlReady) {
+    try { return rlAgentShot(aiPos, playerPos, lastBall); } catch { /* fall through */ }
+  }
+  return generateAiShot(aiPos, playerPos);
+}
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
@@ -12,6 +28,7 @@ type Action =
   | { type: 'SET_PROGRESS'; progress: number }
   | { type: 'AI_SHOT_LANDED' }
   | { type: 'PLAYER_CLICKED'; validation: ShotValidation }
+  | { type: 'PLAYER_SERVED'; shot: Shot }
   | { type: 'PLAYER_SHOT_LANDED' }
   | { type: 'RESET_POINT' };
 
@@ -20,22 +37,44 @@ type Action =
 function makeInitialState(): GameState {
   const aiPos     = defaultAiPos();
   const playerPos = defaultPlayerPos();
-  const firstShot = generateAiShot(aiPos);
-  return {
-    phase: 'ai_hitting',
-    ballPosition: firstShot.origin,
-    playerPos,
-    aiPos,
-    playerStartPos: playerPos,
-    aiStartPos:     aiPos,
-    currentShot: firstShot,
-    lastValidation: null,
-    score: { player: 0, ai: 0 },
-    rallyCount: 0,
-    animationProgress: 0,
-    pointResult: null,
-    shotHistory: [],
-  };
+  const servingPlayer: 'player' | 'ai' = Math.random() < 0.5 ? 'player' : 'ai';
+
+  if (servingPlayer === 'ai') {
+    const firstShot = generateAiServe(aiPos);
+    return {
+      phase: 'ai_hitting',
+      ballPosition: firstShot.origin,
+      playerPos,
+      aiPos,
+      playerStartPos: playerPos,
+      aiStartPos:     aiPos,
+      currentShot: firstShot,
+      lastValidation: null,
+      score: { player: 0, ai: 0 },
+      rallyCount: 0,
+      animationProgress: 0,
+      pointResult: null,
+      shotHistory: [],
+      servingPlayer,
+    };
+  } else {
+    return {
+      phase: 'awaiting_serve',
+      ballPosition: playerPos,
+      playerPos,
+      aiPos,
+      playerStartPos: playerPos,
+      aiStartPos:     aiPos,
+      currentShot: null,
+      lastValidation: null,
+      score: { player: 0, ai: 0 },
+      rallyCount: 0,
+      animationProgress: 0,
+      pointResult: null,
+      shotHistory: [],
+      servingPlayer,
+    };
+  }
 }
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
@@ -74,8 +113,11 @@ function reducer(state: GameState, action: Action): GameState {
       if (!state.currentShot) return state;
       const { currentShot, playerStartPos } = state;
 
-      // Check if player could have run from their start position to the landing
-      if (!canReach(playerStartPos, currentShot.landing, PLAYER_MAX_SPEED_MS, currentShot.travelTime)) {
+      // rallyCount === 0 means this is the serve — receiver always gets to it.
+      // Movement checks only apply once the rally is under way (shot 2+).
+      const isServe = state.rallyCount === 0;
+
+      if (!isServe && !canReach(playerStartPos, currentShot.landing, PLAYER_MAX_SPEED_MS, currentShot.travelTime)) {
         const stoppedAt = reachablePos(playerStartPos, currentShot.landing, PLAYER_MAX_SPEED_MS, currentShot.travelTime);
         return {
           ...state,
@@ -122,12 +164,27 @@ function reducer(state: GameState, action: Action): GameState {
       };
     }
 
+    case 'PLAYER_SERVED': {
+      return {
+        ...state,
+        phase: 'player_hitting',
+        currentShot: action.shot,
+        ballPosition: action.shot.origin,
+        animationProgress: 0,
+        rallyCount: 0,
+        playerStartPos: state.playerPos,
+        aiStartPos:     state.aiPos,
+      };
+    }
+
     case 'PLAYER_SHOT_LANDED': {
       if (!state.currentShot) return state;
       const { currentShot, aiStartPos } = state;
 
-      // Check if AI could have run from their start position to the landing
-      if (!canReach(aiStartPos, currentShot.landing, AI_MAX_SPEED_MS, currentShot.travelTime)) {
+      // rallyCount === 0 means this is the player's serve — AI always returns it.
+      const isServe = state.rallyCount === 0;
+
+      if (!isServe && !canReach(aiStartPos, currentShot.landing, AI_MAX_SPEED_MS, currentShot.travelTime)) {
         const stoppedAt = reachablePos(aiStartPos, currentShot.landing, AI_MAX_SPEED_MS, currentShot.travelTime);
         return {
           ...state,
@@ -140,9 +197,23 @@ function reducer(state: GameState, action: Action): GameState {
         };
       }
 
-      // AI reached the ball — hit from the landing spot
+      // AI reached the ball — generate return shot, check net clearance
       const newAiPos  = currentShot.landing;
-      const nextShot  = generateAiShot(newAiPos);
+      const nextShot  = _getAiShot(newAiPos, state.playerPos, currentShot.landing);
+
+      if (!checkNetClearance(nextShot.origin, nextShot.landing, nextShot.speed)) {
+        return {
+          ...state,
+          phase: 'point_over',
+          aiPos: newAiPos,
+          ballPosition: newAiPos,
+          animationProgress: 1,
+          score: { ...state.score, player: state.score.player + 1 },
+          pointResult: 'player_wins',
+          lastValidation: { valid: false, reason: 'net_fault' },
+        };
+      }
+
       return {
         ...state,
         phase: 'ai_hitting',
@@ -159,20 +230,43 @@ function reducer(state: GameState, action: Action): GameState {
     case 'RESET_POINT': {
       const aiPos     = defaultAiPos();
       const playerPos = defaultPlayerPos();
-      const nextShot  = generateAiShot(aiPos);
-      return {
-        ...state,
-        phase: 'ai_hitting',
-        aiPos,
-        playerPos,
-        playerStartPos: playerPos,
-        aiStartPos:     aiPos,
-        currentShot: nextShot,
-        ballPosition: nextShot.origin,
-        animationProgress: 0,
-        lastValidation: null,
-        pointResult: null,
-      };
+      // Alternate server each point
+      const servingPlayer: 'player' | 'ai' = state.servingPlayer === 'player' ? 'ai' : 'player';
+
+      if (servingPlayer === 'ai') {
+        const nextShot = generateAiServe(aiPos);
+        return {
+          ...state,
+          phase: 'ai_hitting',
+          aiPos,
+          playerPos,
+          playerStartPos: playerPos,
+          aiStartPos:     aiPos,
+          currentShot: nextShot,
+          ballPosition: nextShot.origin,
+          animationProgress: 0,
+          lastValidation: null,
+          pointResult: null,
+          rallyCount: 0,
+          servingPlayer,
+        };
+      } else {
+        return {
+          ...state,
+          phase: 'awaiting_serve',
+          aiPos,
+          playerPos,
+          playerStartPos: playerPos,
+          aiStartPos:     aiPos,
+          currentShot: null,
+          ballPosition: playerPos,
+          animationProgress: 0,
+          lastValidation: null,
+          pointResult: null,
+          rallyCount: 0,
+          servingPlayer,
+        };
+      }
     }
 
     case 'RECORD_SHOT': {
@@ -188,6 +282,18 @@ function reducer(state: GameState, action: Action): GameState {
 
 export function useGameState() {
   const [state, dispatch] = useReducer(reducer, undefined, makeInitialState);
+  const [serveError, setServeError] = useState<ValidationReason | null>(null);
+  const serveErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Load RL weights once on mount; fall back to heuristic until ready
+  useEffect(() => {
+    initRLAgent().then(() => { _rlReady = true; }).catch(console.error);
+  }, []);
+
+  // Reset RL frame history at the start of every new point
+  useEffect(() => {
+    if (state.rallyCount === 0) resetRLFrameBuffer();
+  }, [state.rallyCount]);
 
   // Track current phase and shot in a ref so the rAF closure sees fresh values
   const phaseRef = useRef<GamePhase>(state.phase);
@@ -237,7 +343,26 @@ export function useGameState() {
     return () => clearTimeout(id);
   }, [state.phase]);
 
+  function showServeError(reason: ValidationReason) {
+    if (serveErrorTimer.current) clearTimeout(serveErrorTimer.current);
+    setServeError(reason);
+    serveErrorTimer.current = setTimeout(() => setServeError(null), 1500);
+  }
+
   function handleCanvasClick(canvasPx: Vec2) {
+    if (state.phase === 'awaiting_serve') {
+      const target = canvasClickToCourt(canvasPx.x, canvasPx.y);
+      if (target.x < 0) return; // above horizon
+      const validation = validateServe(state.playerPos, target);
+      if (validation.valid && validation.returnShot) {
+        setServeError(null);
+        dispatch({ type: 'PLAYER_SERVED', shot: validation.returnShot });
+      } else if (validation.reason) {
+        showServeError(validation.reason);
+      }
+      return;
+    }
+
     if (state.phase !== 'awaiting_input' || !state.currentShot) return;
     const target     = canvasClickToCourt(canvasPx.x, canvasPx.y);
     const validation = validateReturn(state.currentShot, state.playerPos, target);
@@ -260,5 +385,5 @@ export function useGameState() {
     dispatch({ type: 'PLAYER_CLICKED', validation });
   }
 
-  return { state, handleCanvasClick };
+  return { state, handleCanvasClick, serveError };
 }

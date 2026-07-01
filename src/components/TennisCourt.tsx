@@ -1,38 +1,49 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { GameState, Shot, Vec2 } from '../types';
+import { GameState, Shot, Vec2, ValidationReason } from '../types';
 import {
   CANVAS_W, CANVAS_H, COURT,
   project3D, FOCAL,
 } from '../engine/court';
-import { ballHeightAt, PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS } from '../engine/kinematics';
+import {
+  ballHeightAt, HIT_HEIGHT,
+  PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS,
+  PLAYER_ACCEL_MS2, AI_ACCEL_MS2, reachableDistAccel,
+} from '../engine/kinematics';
 
 interface Props {
   state: GameState;
   handleCanvasClick: (px: Vec2) => void;
+  serveError: ValidationReason | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getBallZ(progress: number, shot: Shot): number {
-  return ballHeightAt(progress * shot.travelTime, shot.vz);
+  return ballHeightAt(progress * shot.travelTime, shot.vz, shot.hitHeight ?? HIT_HEIGHT);
 }
 
 function lerpN(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
-// Animate a player running from startPos toward targetPos, capped by their max speed.
+// Animate a player running from startPos toward targetPos with acceleration.
 // Returns where they are at animation fraction t (0..1) over the shot's travel time.
-function computeRunningPos(startPos: Vec2, targetPos: Vec2, maxSpeed: number, travelTime: number, t: number): Vec2 {
+function computeRunningPos(
+  startPos: Vec2, targetPos: Vec2,
+  maxSpeed: number, accel: number, travelTime: number, t: number,
+): Vec2 {
   const dx   = targetPos.x - startPos.x;
   const dy   = targetPos.y - startPos.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
   if (dist < 0.001) return startPos;
-  const maxReach    = maxSpeed * travelTime;
-  const reachFrac   = Math.min(1, maxReach / dist);
-  const finalX      = startPos.x + dx * reachFrac;
-  const finalY      = startPos.y + dy * reachFrac;
-  return { x: startPos.x + (finalX - startPos.x) * t, y: startPos.y + (finalY - startPos.y) * t };
+
+  const elapsed    = t * travelTime;
+  const dCovered   = reachableDistAccel(maxSpeed, accel, elapsed);
+  const totalReach = reachableDistAccel(maxSpeed, accel, travelTime);
+  const finalFrac  = Math.min(1, totalReach / dist);
+  const nowFrac    = Math.min(finalFrac, dCovered / dist);
+
+  return { x: startPos.x + dx * nowFrac, y: startPos.y + dy * nowFrac };
 }
 
 type Ctx = CanvasRenderingContext2D;
@@ -458,11 +469,14 @@ function drawNetShadow(ctx: Ctx) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function TennisCourt({ state, handleCanvasClick }: Props) {
+export default function TennisCourt({ state, handleCanvasClick, serveError }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tickRef   = useRef(0);
   const rafRef    = useRef<number>(0);
   const swingRef  = useRef<{ who: 'player' | 'ai'; startProg: number } | null>(null);
+
+  const serveErrorRef = useRef<ValidationReason | null>(serveError);
+  useEffect(() => { serveErrorRef.current = serveError; }, [serveError]);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;
@@ -507,7 +521,7 @@ export default function TennisCourt({ state, handleCanvasClick }: Props) {
         startProg: prog,
       };
     }
-    if (state.phase === 'awaiting_input' || state.phase === 'point_over') {
+    if (state.phase === 'awaiting_input' || state.phase === 'awaiting_serve' || state.phase === 'point_over') {
       swingRef.current = null;
     }
 
@@ -528,12 +542,12 @@ export default function TennisCourt({ state, handleCanvasClick }: Props) {
       if (state.phase === 'ai_hitting') {
         // Player runs toward ball's landing; AI stands still (just hit)
         visualPlayerPos = computeRunningPos(
-          state.playerStartPos, shot.landing, PLAYER_MAX_SPEED_MS, shot.travelTime, prog,
+          state.playerStartPos, shot.landing, PLAYER_MAX_SPEED_MS, PLAYER_ACCEL_MS2, shot.travelTime, prog,
         );
       } else if (state.phase === 'player_hitting') {
         // AI runs toward ball's landing; player stands still (just hit)
         visualAiPos = computeRunningPos(
-          state.aiStartPos, shot.landing, AI_MAX_SPEED_MS, shot.travelTime, prog,
+          state.aiStartPos, shot.landing, AI_MAX_SPEED_MS, AI_ACCEL_MS2, shot.travelTime, prog,
         );
       }
     }
@@ -551,7 +565,44 @@ export default function TennisCourt({ state, handleCanvasClick }: Props) {
       drawLandingPulse(ctx, shot.landing.x, shot.landing.y, tick);
     }
 
+    // ── Serve: highlight AI service box ───────────────────────────────────
+    if (state.phase === 'awaiting_serve') {
+      const { widthM, netYM, serviceBoxDepthM } = COURT;
+      const pulse = 0.10 + 0.06 * Math.sin(tick * 0.09);
+      fillPoly3D(ctx, [
+        [0,     netYM,                    0.005],
+        [widthM, netYM,                   0.005],
+        [widthM, netYM + serviceBoxDepthM, 0.005],
+        [0,     netYM + serviceBoxDepthM, 0.005],
+      ], `rgba(255,230,40,${pulse})`);
+    }
+
     // ── UI overlays ────────────────────────────────────────────────────────
+    if (state.phase === 'awaiting_serve') {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText('YOUR SERVE — click the highlighted service box to serve', CANVAS_W / 2, 10);
+      ctx.restore();
+
+      const err = serveErrorRef.current;
+      if (err) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillText(err === 'net_fault' ? 'NET FAULT — aim deeper' : 'AIM INSIDE THE SERVICE BOX',
+          CANVAS_W / 2 + 2, CANVAS_H / 2 + 2);
+        ctx.fillStyle = '#ff5050';
+        ctx.fillText(err === 'net_fault' ? 'NET FAULT — aim deeper' : 'AIM INSIDE THE SERVICE BOX',
+          CANVAS_W / 2, CANVAS_H / 2);
+        ctx.restore();
+      }
+    }
+
     if (state.phase === 'awaiting_input') {
       ctx.save();
       ctx.fillStyle = 'rgba(255,255,255,0.65)';
@@ -570,8 +621,8 @@ export default function TennisCourt({ state, handleCanvasClick }: Props) {
       const reason   = state.lastValidation?.reason;
       const line1    = isAiWin
         ? (reason === 'out_of_bounds' ? 'OUT' : reason === 'net_fault' ? 'NET FAULT' : reason === 'impossible_angle' ? 'BAD ANGLE' : 'UNREACHABLE — AI wins')
-        : 'WINNER!';
-      const line2    = isAiWin ? 'AI wins the point' : 'Player wins the point';
+        : (reason === 'net_fault' ? 'AI NET FAULT' : 'WINNER!');
+      const line2    = isAiWin ? 'AI wins the point' : (reason === 'net_fault' ? 'AI clipped the net' : 'Player wins the point');
       ctx.textAlign  = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = 'bold 32px sans-serif';
@@ -612,7 +663,7 @@ export default function TennisCourt({ state, handleCanvasClick }: Props) {
       height={CANVAS_H}
       onClick={onClick}
       style={{
-        cursor: state.phase === 'awaiting_input' ? 'crosshair' : 'default',
+        cursor: (state.phase === 'awaiting_input' || state.phase === 'awaiting_serve') ? 'crosshair' : 'default',
         border: '1px solid rgba(255,255,255,0.08)',
         borderRadius: '12px',
         display: 'block',

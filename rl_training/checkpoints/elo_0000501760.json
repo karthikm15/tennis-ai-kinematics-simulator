@@ -1,0 +1,245 @@
+{
+  "active": {
+    "elo": 2024.9,
+    "win_rate": 0.9711,
+    "wins": 324548,
+    "losses": 9657,
+    "draws": 0
+  },
+  "checkpoints": {
+    "1": {
+      "ckpt_id": 1,
+      "elo": 1039.1,
+      "win_rate": 0.3069,
+      "wins": 2495,
+      "losses": 5635,
+      "draws": 0,
+      "games": 8130
+    },
+    "2": {
+      "ckpt_id": 2,
+      "elo": 1185.0,
+      "win_rate": 0.0835,
+      "wins": 2085,
+      "losses": 22896,
+      "draws": 0,
+      "games": 24981
+    },
+    "3": {
+      "ckpt_id": 3,
+      "elo": 1079.2,
+      "win_rate": 0.0473,
+      "wins": 561,
+      "losses": 11292,
+      "draws": 0,
+      "games": 11853
+    },
+    "4": {
+      "ckpt_id": 4,
+      "elo": 1083.6,
+      "win_rate": 0.0349,
+      "wins": 446,
+      "losses": 12332,
+      "draws": 0,
+      "games": 12778
+    },
+    "5": {
+      "ckpt_id": 5,
+      "elo": 1138.4,
+      "win_rate": 0.0311,
+      "wins": 414,
+      "losses": 12890,
+      "draws": 0,
+      "games": 13304
+    },
+    "6": {
+      "ckpt_id": 6,
+      "elo": 1193.1,
+      "win_rate": 0.0183,
+      "wins": 497,
+      "losses": 26691,
+      "draws": 0,
+      "games": 27188
+    },
+    "7": {
+      "ckpt_id": 7,
+      "elo": 1224.2,
+      "win_rate": 0.0322,
+      "wins": 430,
+      "losses": 12925,
+      "draws": 0,
+      "games": 13355
+    },
+    "8": {
+      "ckpt_id": 8,
+      "elo": 1200.0,
+      "win_rate": 0.0,
+      "wins": 0,
+      "losses": 0,
+      "draws": 0,
+      "games": 0
+    },
+    "9": {
+      "ckpt_id": 9,
+      "elo": 1154.9,
+      "win_rate": 0.0254,
+      "wins": 341,
+      "losses": 13066,
+      "draws": 0,
+      "games": 13407
+    },
+    "10": {
+      "ckpt_id": 10,
+      "elo": 1123.8,
+      "win_rate": 0.0217,
+      "wins": 290,
+      "losses": 13088,
+      "draws": 0,
+      "games": 13378
+    },
+    "11": {
+      "ckpt_id": 11,
+      "elo": 1174.5,
+      "win_rate": 0.0138,
+      "wins": 384,
+      "losses": 27519,
+      "draws": 0,
+      "games": 27903
+    },
+    "12": {
+      "ckpt_id": 12,
+      "elo": 1141.0,
+      "win_rate": 0.0175,
+      "wins": 239,
+      "losses": 13402,
+      "draws": 0,
+      "games": 13641
+    },
+    "13": {
+      "ckpt_id": 13,
+      "elo": 1177.4,
+      "win_rate": 0.0145,
+      "wins": 197,
+      "losses": 13423,
+      "draws": 0,
+      "games": 13620
+    },
+    "14": {
+      "ckpt_id": 14,
+      "elo": 1165.9,
+      "win_rate": 0.011,
+      "wins": 151,
+      "losses": 13564,
+      "draws": 0,
+      "games": 13715
+    },
+    "15": {
+      "ckpt_id": 15,
+      "elo": 1189.7,
+      "win_rate": 0.0114,
+      "wins": 157,
+      "losses": 13632,
+      "draws": 0,
+      "games": 13789
+    },
+    "16": {
+      "ckpt_id": 16,
+      "elo": 1155.5,
+      "win_rate": 0.0089,
+      "wins": 123,
+      "losses": 13690,
+      "draws": 0,
+      "games": 13813
+    },
+    "17": {
+      "ckpt_id": 17,
+      "elo": 1229.8,
+      "win_rate": 0.0109,
+      "wins": 151,
+      "losses": 13719,
+      "draws": 0,
+      "games": 13870
+    },
+    "18": {
+      "ckpt_id": 18,
+      "elo": 1182.9,
+      "win_rate": 0.01,
+      "wins": 139,
+      "losses": 13737,
+      "draws": 0,
+      "games": 13876
+    },
+    "19": {
+      "ckpt_id": 19,
+      "elo": 1156.9,
+      "win_rate": 0.0078,
+      "wins": 108,
+      "losses": 13820,
+      "draws": 0,
+      "games": 13928
+    },
+    "20": {
+      "ckpt_id": 20,
+      "elo": 1200.0,
+      "win_rate": 0.0,
+      "wins": 0,
+      "losses": 0,
+      "draws": 0,
+      "games": 0
+    },
+    "21": {
+      "ckpt_id": 21,
+      "elo": 1171.3,
+      "win_rate": 0.007,
+      "wins": 99,
+      "losses": 13976,
+      "draws": 0,
+      "games": 14075
+    },
+    "22": {
+      "ckpt_id": 22,
+      "elo": 1186.4,
+      "win_rate": 0.0071,
+      "wins": 100,
+      "losses": 13899,
+      "draws": 0,
+      "games": 13999
+    },
+    "23": {
+      "ckpt_id": 23,
+      "elo": 1198.5,
+      "win_rate": 0.0078,
+      "wins": 110,
+      "losses": 13989,
+      "draws": 0,
+      "games": 14099
+    },
+    "24": {
+      "ckpt_id": 24,
+      "elo": 1200.0,
+      "win_rate": 0.0,
+      "wins": 0,
+      "losses": 0,
+      "draws": 0,
+      "games": 0
+    },
+    "25": {
+      "ckpt_id": 25,
+      "elo": 1228.3,
+      "win_rate": 0.009,
+      "wins": 128,
+      "losses": 14140,
+      "draws": 0,
+      "games": 14268
+    },
+    "26": {
+      "ckpt_id": 26,
+      "elo": 1195.7,
+      "win_rate": 0.0097,
+      "wins": 12,
+      "losses": 1223,
+      "draws": 0,
+      "games": 1235
+    }
+  }
+}

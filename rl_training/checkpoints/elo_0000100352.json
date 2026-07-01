@@ -1,0 +1,65 @@
+{
+  "active": {
+    "elo": 1785.9,
+    "win_rate": 0.908,
+    "wins": 52413,
+    "losses": 5313,
+    "draws": 0
+  },
+  "checkpoints": {
+    "1": {
+      "ckpt_id": 1,
+      "elo": 1039.1,
+      "win_rate": 0.3069,
+      "wins": 2495,
+      "losses": 5635,
+      "draws": 0,
+      "games": 8130
+    },
+    "2": {
+      "ckpt_id": 2,
+      "elo": 1075.8,
+      "win_rate": 0.1217,
+      "wins": 1389,
+      "losses": 10024,
+      "draws": 0,
+      "games": 11413
+    },
+    "3": {
+      "ckpt_id": 3,
+      "elo": 1079.2,
+      "win_rate": 0.0473,
+      "wins": 561,
+      "losses": 11292,
+      "draws": 0,
+      "games": 11853
+    },
+    "4": {
+      "ckpt_id": 4,
+      "elo": 1083.6,
+      "win_rate": 0.0349,
+      "wins": 446,
+      "losses": 12332,
+      "draws": 0,
+      "games": 12778
+    },
+    "5": {
+      "ckpt_id": 5,
+      "elo": 1138.4,
+      "win_rate": 0.0311,
+      "wins": 414,
+      "losses": 12890,
+      "draws": 0,
+      "games": 13304
+    },
+    "6": {
+      "ckpt_id": 6,
+      "elo": 1197.9,
+      "win_rate": 0.0323,
+      "wins": 8,
+      "losses": 240,
+      "draws": 0,
+      "games": 248
+    }
+  }
+}

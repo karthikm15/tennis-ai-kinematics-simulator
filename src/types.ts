@@ -15,6 +15,7 @@ export interface Shot {
   spinType: SpinType;
   travelTime: number; // seconds
   vz: number;         // vertical launch velocity (m/s) for arc visualization
+  hitHeight?: number; // contact point height above court (m); defaults to HIT_HEIGHT = 1.0
 }
 
 export type ValidationReason = 'out_of_bounds' | 'unreachable' | 'impossible_angle' | 'net_fault';
@@ -29,6 +30,7 @@ export interface ShotValidation {
 
 export type GamePhase =
   | 'ai_hitting'
+  | 'awaiting_serve'
   | 'awaiting_input'
   | 'player_hitting'
   | 'point_over';
@@ -47,4 +49,5 @@ export interface GameState {
   animationProgress: number; // 0..1
   pointResult: 'player_wins' | 'ai_wins' | null;
   shotHistory: ShotRecord[];
+  servingPlayer: 'player' | 'ai';
 }

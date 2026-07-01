@@ -1,0 +1,20 @@
+# Competitive Tennis PPO — Python dependencies
+# Install with: pip install -r requirements.txt
+
+# Unity ML-Agents Python API (communicates with the Unity binary)
+# 0.28.0 is the highest release on PyPI; DecisionSteps/TerminalSteps/ActionTuple
+# API used in env_wrapper.py has been stable since 0.27.0.
+mlagents-envs==0.25.1
+
+# Deep learning framework
+torch>=2.1.0
+
+# protobuf 4.x broke the generated _pb2.py files that mlagents-envs ships with.
+# Must stay on the 3.20.x line until mlagents regenerates its protos.
+protobuf>=3.19.0,<4.0.0
+
+# Numerical computing (transitive dep, pinned for reproducibility)
+numpy>=1.24.0,<2.0.0
+
+# Optional: structured logging (uncomment if you add TensorBoard support)
+# tensorboard>=2.14.0

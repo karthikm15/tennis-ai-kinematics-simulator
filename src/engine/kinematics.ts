@@ -15,51 +15,62 @@ function dot(a: Vec2, b: Vec2): number { return a.x * b.x + a.y * b.y; }
 
 export const PLAYER_MAX_SPEED_MS = 6.0;  // human player sprint speed (m/s)
 export const AI_MAX_SPEED_MS     = 5.5;  // AI opponent sprint speed (m/s)
+// With these values, from standstill the player reaches max speed in 0.5s
+// and covers ~7.5m in 1.5s — enough for most groundstrokes but not extreme corners.
+export const PLAYER_ACCEL_MS2    = 12.0;
+export const AI_ACCEL_MS2        = 10.0;
 
 const MIN_DEFLECTION_ANGLE_RAD = (30 * Math.PI) / 180;
 const BASE_SWING_POWER = 8.0;
 const TRANSFER_COEFFICIENT = 0.6;
 export const GRAVITY = 9.81;
-export const HIT_HEIGHT = 1.0; // m — racket contact height above court
+export const HIT_HEIGHT       = 1.0; // m — groundstroke contact height
+export const SERVE_HIT_HEIGHT = 2.4; // m — overhead serve contact height
 
 // ── Arc helpers (exported for visualization) ──────────────────────────────────
 
-/**
- * Vertical launch velocity (m/s) for a shot that starts at HIT_HEIGHT and
- * lands on the ground (z=0) after travelTime seconds.
- * Derived from: HIT_HEIGHT + Vz*T − 0.5*g*T² = 0
- */
+export function computeVzFromHeight(startHeight: number, travelTime: number): number {
+  return 0.5 * GRAVITY * travelTime - startHeight / travelTime;
+}
+
 export function computeVz(travelTime: number): number {
-  return 0.5 * GRAVITY * travelTime - HIT_HEIGHT / travelTime;
+  return computeVzFromHeight(HIT_HEIGHT, travelTime);
 }
 
-/**
- * Ball height (m) at elapsed time t seconds into a shot with the given vz.
- * Clamped to zero so the ball never clips through the court.
- */
-export function ballHeightAt(t: number, vz: number): number {
-  return Math.max(0, HIT_HEIGHT + vz * t - 0.5 * GRAVITY * t * t);
+export function ballHeightAt(t: number, vz: number, startHeight = HIT_HEIGHT): number {
+  return Math.max(0, startHeight + vz * t - 0.5 * GRAVITY * t * t);
 }
 
-// ── Individual validation checks ──────────────────────────────────────────────
-
-export function isReachable(ballLanding: Vec2, playerPos: Vec2, ballTravelTime: number): boolean {
-  const dist = mag(sub(ballLanding, playerPos));
-  return dist / PLAYER_MAX_SPEED_MS <= ballTravelTime;
-}
+// ── Movement reach (game logic — fixed max speed) ─────────────────────────────
 
 export function canReach(from: Vec2, to: Vec2, maxSpeed: number, travelTime: number): boolean {
   return mag(sub(to, from)) <= maxSpeed * travelTime;
 }
 
 export function reachablePos(from: Vec2, to: Vec2, maxSpeed: number, travelTime: number): Vec2 {
-  const d = sub(to, from);
+  const d    = sub(to, from);
   const dist = mag(d);
   if (dist < 0.001) return from;
   const maxDist = maxSpeed * travelTime;
   if (dist <= maxDist) return to;
   const frac = maxDist / dist;
   return { x: from.x + d.x * frac, y: from.y + d.y * frac };
+}
+
+// ── Visual-only acceleration helper (used by TennisCourt animation) ───────────
+
+// Distance covered starting from rest after `time` seconds under acceleration.
+export function reachableDistAccel(maxSpeed: number, accel: number, time: number): number {
+  const tToMax = maxSpeed / accel;
+  if (time <= tToMax) return 0.5 * accel * time * time;
+  return 0.5 * accel * tToMax * tToMax + maxSpeed * (time - tToMax);
+}
+
+// ── isReachable (used inside validateReturn — always true since playerPos == landing) ──
+
+export function isReachable(ballLanding: Vec2, playerPos: Vec2, ballTravelTime: number): boolean {
+  const dist = mag(sub(ballLanding, playerPos));
+  return dist / PLAYER_MAX_SPEED_MS <= ballTravelTime;
 }
 
 export function computeDeflectionAngle(incomingDir: Vec2, outgoingDir: Vec2): number {
@@ -72,7 +83,9 @@ export function computeReturnSpeed(incomingSpeed: number, deflectionAngle: numbe
   return Math.max(BASE_SWING_POWER, BASE_SWING_POWER + incomingSpeed * TRANSFER_COEFFICIENT * cosFactor);
 }
 
-export function checkNetClearance(hitPoint: Vec2, targetPoint: Vec2, speed: number): boolean {
+export function checkNetClearance(
+  hitPoint: Vec2, targetPoint: Vec2, speed: number, startHeight = HIT_HEIGHT,
+): boolean {
   const NET_Y = COURT.netYM;
   const totalHorizDist = mag(sub(targetPoint, hitPoint));
   if (totalHorizDist < 0.01) return false;
@@ -81,12 +94,48 @@ export function checkNetClearance(hitPoint: Vec2, targetPoint: Vec2, speed: numb
   const maxY = Math.max(hitPoint.y, targetPoint.y);
   if (NET_Y < minY || NET_Y > maxY) return true;
 
-  const tLand  = totalHorizDist / speed;
-  const vz     = computeVz(tLand);
+  const tLand     = totalHorizDist / speed;
+  const vz        = computeVzFromHeight(startHeight, tLand);
   const distToNet = Math.abs(NET_Y - hitPoint.y);
-  const tNet   = (distToNet / Math.abs(targetPoint.y - hitPoint.y)) * tLand;
+  const tNet      = (distToNet / Math.abs(targetPoint.y - hitPoint.y)) * tLand;
 
-  return ballHeightAt(tNet, vz) >= COURT.netHeightCenterM;
+  return ballHeightAt(tNet, vz, startHeight) >= COURT.netHeightCenterM;
+}
+
+// ── Serve validation ──────────────────────────────────────────────────────────
+
+function isInAiServiceBox(point: Vec2): boolean {
+  const { widthM, netYM, serviceBoxDepthM } = COURT;
+  return point.x >= 0 && point.x <= widthM
+    && point.y >= netYM && point.y <= netYM + serviceBoxDepthM;
+}
+
+export function validateServe(playerPos: Vec2, target: Vec2): ShotValidation {
+  if (!isInAiServiceBox(target)) {
+    return { valid: false, reason: 'out_of_bounds' };
+  }
+
+  const speed = 20 + Math.random() * 8; // 20–28 m/s
+
+  // Serve contact is overhead — use SERVE_HIT_HEIGHT for net clearance check
+  if (!checkNetClearance(playerPos, target, speed, SERVE_HIT_HEIGHT)) {
+    return { valid: false, reason: 'net_fault' };
+  }
+
+  const dist       = mag(sub(target, playerPos));
+  const travelTime = Math.max(dist / speed, 0.8);
+
+  const returnShot: Shot = {
+    origin:     playerPos,
+    landing:    target,
+    speed,
+    spinType:   'flat',
+    travelTime,
+    hitHeight:  SERVE_HIT_HEIGHT,
+    vz:         computeVzFromHeight(SERVE_HIT_HEIGHT, travelTime),
+  };
+
+  return { valid: true, returnShot };
 }
 
 // ── Master validation ─────────────────────────────────────────────────────────
@@ -118,8 +167,8 @@ export function validateReturn(
     return { valid: false, reason: 'net_fault', deflectionAngle: deflAngle, returnSpeed };
   }
 
-  const dist     = mag(sub(target, incoming.landing));
-  const travelTime = Math.max(dist / returnSpeed, 0.5);
+  const dist       = mag(sub(target, incoming.landing));
+  const travelTime = Math.max(dist / returnSpeed, 0.8);
 
   const returnShot: Shot = {
     origin:     incoming.landing,

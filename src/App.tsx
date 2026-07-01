@@ -5,7 +5,7 @@ import PlayerProfile from './components/PlayerProfile';
 import { useGameState } from './hooks/useGameState';
 
 export default function App() {
-  const { state, handleCanvasClick } = useGameState();
+  const { state, handleCanvasClick, serveError } = useGameState();
 
   return (
     <div style={{
@@ -55,7 +55,7 @@ export default function App() {
       }}>
         {/* Court */}
         <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-          <TennisCourt state={state} handleCanvasClick={handleCanvasClick} />
+          <TennisCourt state={state} handleCanvasClick={handleCanvasClick} serveError={serveError} />
           {/* Court labels */}
           <div style={{
             display: 'flex',
