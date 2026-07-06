@@ -20,7 +20,7 @@ export const AI_MAX_SPEED_MS     = 5.5;  // AI opponent sprint speed (m/s)
 export const PLAYER_ACCEL_MS2    = 12.0;
 export const AI_ACCEL_MS2        = 10.0;
 
-const MIN_DEFLECTION_ANGLE_RAD = (30 * Math.PI) / 180;
+const MIN_DEFLECTION_ANGLE_RAD = (20 * Math.PI) / 180;
 const BASE_SWING_POWER = 8.0;
 const TRANSFER_COEFFICIENT = 0.6;
 export const GRAVITY = 9.81;

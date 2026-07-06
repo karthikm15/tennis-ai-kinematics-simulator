@@ -40,6 +40,12 @@ interface ModelWeights {
 let _weights: ModelWeights | null = null;
 const N_FRAMES = 3;
 const N_FEATURES = 8;
+const PLAYER_FRIENDLY_X_MARGIN = 0.9;
+const PLAYER_FRIENDLY_NEAR_Y = 2.2;
+const PLAYER_FRIENDLY_NET_BUFFER = 2.0;
+const LANDING_BLEND_TO_PLAYER = 0.35;
+const RALLY_SPEED_MS = 8.5;
+const MIN_RALLY_TRAVEL_TIME = 1.6;
 // Ring buffer for frame stacking
 const _frameBuffer: number[][] = [];
 
@@ -157,16 +163,19 @@ export function rlAgentShot(
   const landX = margin + ((action[0] + 1) / 2) * (width - 2 * margin);
   const landY = margin + ((action[1] + 1) / 2) * (net_y - net_margin - margin);
 
+  const easierX = landX * (1 - LANDING_BLEND_TO_PLAYER) + playerPos.x * LANDING_BLEND_TO_PLAYER;
+  const easierY = landY * (1 - LANDING_BLEND_TO_PLAYER) + playerPos.y * LANDING_BLEND_TO_PLAYER;
+
   const landing: Vec2 = {
-    x: Math.max(0, Math.min(width,  landX)),
-    y: Math.max(0, Math.min(net_y - 0.01, landY)),
+    x: Math.max(PLAYER_FRIENDLY_X_MARGIN, Math.min(width - PLAYER_FRIENDLY_X_MARGIN, easierX)),
+    y: Math.max(PLAYER_FRIENDLY_NEAR_Y, Math.min(net_y - PLAYER_FRIENDLY_NET_BUFFER, easierY)),
   };
 
   const dx = landing.x - aiPos.x;
   const dy = landing.y - aiPos.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
-  const speed = 10.0;
-  const travelTime = Math.max(dist / speed, 0.8);
+  const speed = RALLY_SPEED_MS;
+  const travelTime = Math.max(dist / speed, MIN_RALLY_TRAVEL_TIME);
 
   return {
     origin:     aiPos,
