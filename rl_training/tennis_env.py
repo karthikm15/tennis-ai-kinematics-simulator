@@ -73,6 +73,13 @@ OPP_MAX_SPEED = 6.0   # PLAYER_MAX_SPEED_MS
 
 SHOT_SPEED      = 10.0  # m/s  (fixed rally speed — matches mid-range in ai.ts)
 MIN_TRAVEL_TIME = 0.8   # seconds  (matching validateReturn)
+RALLY_CONTINUE_REWARD = 0.025
+HIT_AWAY_BONUS_SCALE = 0.05
+DEPTH_BONUS_SCALE = 0.03
+CENTER_SPAM_PENALTY = 0.025
+EXTREME_CORNER_PENALTY = 0.06
+CHEAP_WINNER_PENALTY = 0.25
+LONG_RALLY_SHOT_COUNT = 4
 
 # ── Observation ───────────────────────────────────────────────────────────────
 
@@ -276,6 +283,7 @@ class TennisEnv:
         # Stats
         self.episodes_completed: int = 0
         self.total_shots: int = 0
+        self._rally_len: int = 0
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -304,6 +312,7 @@ class TennisEnv:
         # Ball starts at mid-court (serve is first action)
         self._last_ball_x = COURT_WIDTH / 2.0
         self._last_ball_y = NET_Y
+        self._rally_len = 0
 
         # Fill both frame buffers with the initial frame (3× to avoid zero-padding)
         initial_frame = self._build_frame_ai()
@@ -349,6 +358,13 @@ class TennisEnv:
         if not _net_clearance(self._ai_x, self._ai_y, land_x_0, land_y_0):
             return self._terminal(-1.0, "net_fault_0")
 
+        shaped_reward = self._shot_quality_reward(
+            land_x_0,
+            land_y_0,
+            self._opp_x,
+            self._opp_y,
+        )
+
         # Did player reach in time?
         opp_reached = _can_reach(
             self._opp_x, self._opp_y,
@@ -358,7 +374,10 @@ class TennisEnv:
         if not opp_reached:
             # AI wins the point
             self._update_positions_0(land_x_0, land_y_0, t_fly_0)
-            return self._terminal(+1.0, "winner")
+            winner_reward = 1.0 + shaped_reward
+            if self._rally_len < LONG_RALLY_SHOT_COUNT:
+                winner_reward -= CHEAP_WINNER_PENALTY
+            return self._terminal(winner_reward, "winner")
 
         # Player reaches ball — update their position
         self._update_positions_0(land_x_0, land_y_0, t_fly_0)
@@ -407,14 +426,35 @@ class TennisEnv:
         self._update_positions_1(land_x_1, land_y_1, t_fly_1)
         self._last_ball_x = land_x_1
         self._last_ball_y = land_y_1
+        self._rally_len += 1
 
         # Push new frame
         self._frame_buf.append(self._build_frame_ai())
 
-        return self._get_obs(), 0.0, False, False, {
+        return self._get_obs(), RALLY_CONTINUE_REWARD + shaped_reward, False, False, {
             "shot_outcome": "rally",
             "ai_pos": (self._ai_x, self._ai_y),
         }
+
+    def _shot_quality_reward(
+        self,
+        land_x: float,
+        land_y: float,
+        opp_x: float,
+        opp_y: float,
+    ) -> float:
+        lateral_pressure = min(abs(land_x - opp_x) / COURT_WIDTH, 1.0)
+        depth = 1.0 - min(max(land_y - PLAYER_BASELINE_Y, 0.0) / NET_Y, 1.0)
+        center_distance = abs(land_x - COURT_WIDTH / 2.0)
+        center_penalty = CENTER_SPAM_PENALTY if center_distance < 0.9 else 0.0
+        extreme_corner = (land_x < 0.9 or land_x > COURT_WIDTH - 0.9) and land_y < 2.0
+        corner_penalty = EXTREME_CORNER_PENALTY if extreme_corner else 0.0
+        return (
+            HIT_AWAY_BONUS_SCALE * lateral_pressure
+            + DEPTH_BONUS_SCALE * depth
+            - center_penalty
+            - corner_penalty
+        )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

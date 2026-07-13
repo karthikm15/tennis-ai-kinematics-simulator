@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+rl_training/checkpoints_reward_v2/
 __pycache__/
 *.pyc
 ai_policy/artifacts/

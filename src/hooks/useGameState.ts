@@ -2,9 +2,9 @@ import { useReducer, useEffect, useRef, useState } from 'react';
 import { GameState, GamePhase, Shot, ShotValidation, Vec2, ShotRecord, ValidationReason } from '../types';
 import {
   validateReturn, validateServe,
-  canReach, reachablePos,
+  canAiReach, canPlayerReach,
+  reachableAiPos, reachablePlayerPos,
   checkNetClearance,
-  PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS,
 } from '../engine/kinematics';
 import { generateAiShot, generateAiServe, defaultAiPos, defaultPlayerPos } from '../engine/ai';
 import { canvasClickToCourt } from '../engine/court';
@@ -117,8 +117,8 @@ function reducer(state: GameState, action: Action): GameState {
       // Movement checks only apply once the rally is under way (shot 2+).
       const isServe = state.rallyCount === 0;
 
-      if (!isServe && !canReach(playerStartPos, currentShot.landing, PLAYER_MAX_SPEED_MS, currentShot.travelTime)) {
-        const stoppedAt = reachablePos(playerStartPos, currentShot.landing, PLAYER_MAX_SPEED_MS, currentShot.travelTime);
+      if (!isServe && !canPlayerReach(playerStartPos, currentShot.landing, currentShot.travelTime)) {
+        const stoppedAt = reachablePlayerPos(playerStartPos, currentShot.landing, currentShot.travelTime);
         return {
           ...state,
           phase: 'point_over',
@@ -184,8 +184,8 @@ function reducer(state: GameState, action: Action): GameState {
       // rallyCount === 0 means this is the player's serve — AI always returns it.
       const isServe = state.rallyCount === 0;
 
-      if (!isServe && !canReach(aiStartPos, currentShot.landing, AI_MAX_SPEED_MS, currentShot.travelTime)) {
-        const stoppedAt = reachablePos(aiStartPos, currentShot.landing, AI_MAX_SPEED_MS, currentShot.travelTime);
+      if (!isServe && !canAiReach(aiStartPos, currentShot.landing, currentShot.travelTime)) {
+        const stoppedAt = reachableAiPos(aiStartPos, currentShot.landing, currentShot.travelTime);
         return {
           ...state,
           phase: 'point_over',

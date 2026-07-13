@@ -33,6 +33,7 @@ interface ModelWeights {
   act_dim: number;
   court: { width: number; net_y: number; margin: number; net_margin: number };
   layers: LayerWeights[];
+  actor_log_std?: number[];
 }
 
 // ── Module state ──────────────────────────────────────────────────────────────
@@ -46,6 +47,8 @@ const PLAYER_FRIENDLY_NET_BUFFER = 2.0;
 const LANDING_BLEND_TO_PLAYER = 0.35;
 const RALLY_SPEED_MS = 8.5;
 const MIN_RALLY_TRAVEL_TIME = 1.6;
+const STOCHASTIC_POLICY_TEMPERATURE = 0.75;
+const STOCHASTIC_MEAN_CLAMP = 0.95;
 // Ring buffer for frame stacking
 const _frameBuffer: number[][] = [];
 
@@ -92,6 +95,24 @@ function forward(obs: number[]): number[] {
     }
   }
   return h; // [action_0, action_1] ∈ [-1, 1]
+}
+
+function randn(): number {
+  let u = 0;
+  let v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function sampleTanhNormal(meanAction: number[]): number[] {
+  if (!_weights?.actor_log_std) return meanAction;
+  return meanAction.map((mean, i) => {
+    const clippedMean = Math.max(-STOCHASTIC_MEAN_CLAMP, Math.min(STOCHASTIC_MEAN_CLAMP, mean));
+    const preTanhMean = 0.5 * Math.log((1 + clippedMean) / (1 - clippedMean));
+    const std = Math.exp(_weights!.actor_log_std![i] ?? -2) * STOCHASTIC_POLICY_TEMPERATURE;
+    return Math.tanh(preTanhMean + randn() * std);
+  });
 }
 
 // ── Observation builder ───────────────────────────────────────────────────────
@@ -155,7 +176,8 @@ export function rlAgentShot(
   }
   const obs = padded.flat();   // length 24
 
-  const action = forward(obs);   // [ax, ay] ∈ [-1, 1]
+  const meanAction = forward(obs);   // [ax, ay] ∈ [-1, 1]
+  const action = sampleTanhNormal(meanAction);
 
   // Map action → court landing coordinate (AI shoots toward player's half)
   // y-range matches training: [margin, net_y - net_margin] (NET_MARGIN buffer from net)
