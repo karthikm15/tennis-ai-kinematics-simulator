@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import TennisCourt from './components/TennisCourt';
 import ShotInfo from './components/ShotInfo';
 import ScoreBoard from './components/ScoreBoard';
+import EnergyBar from './components/EnergyBar';
 import PlayerProfile from './components/PlayerProfile';
 import PreMatchScreen from './components/PreMatchScreen';
 import MatchStatsScreen from './components/MatchStatsScreen';
@@ -123,6 +124,14 @@ export default function App() {
             rallyCount={state.rallyCount}
             servingPlayer={state.servingPlayer}
           />
+          <EnergyBar
+            playerEnergy={state.playerEnergy}
+            aiEnergy={state.aiEnergy}
+            playerWinded={state.playerWinded}
+            aiWinded={state.aiWinded}
+            playerLastEffort={state.playerLastEffort}
+            aiLastEffort={state.aiLastEffort}
+          />
           <ShotInfo
             phase={state.phase}
             currentShot={state.currentShot}
@@ -189,6 +198,7 @@ function Legend() {
         lineHeight: 1.6,
       }}>
         When the ball lands, click anywhere on the <span style={{ color: '#94a3b8' }}>right half</span> to return it.
+        Big hits and long sprints burn <span style={{ color: '#94a3b8' }}>energy</span> — run out and you won't reach the next ball. Rally calmly to recover.
       </div>
     </div>
   );

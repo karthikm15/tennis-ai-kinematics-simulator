@@ -98,27 +98,34 @@ export function reachablePosWithAcceleration(
   return { x: from.x + d.x * frac, y: from.y + d.y * frac };
 }
 
-export function canPlayerReach(from: Vec2, to: Vec2, travelTime: number): boolean {
+// speedFactor scales both sprint speed and acceleration — a tired player is
+// slower off the mark and slower flat-out (see energy.ts energySpeedFactor).
+
+export function canPlayerReach(from: Vec2, to: Vec2, travelTime: number, speedFactor = 1): boolean {
   return canReachWithAcceleration(
-    from, to, PLAYER_MAX_SPEED_MS, PLAYER_ACCEL_MS2, travelTime, PLAYER_REACTION_TIME_S,
+    from, to, PLAYER_MAX_SPEED_MS * speedFactor, PLAYER_ACCEL_MS2 * speedFactor,
+    travelTime, PLAYER_REACTION_TIME_S,
   );
 }
 
-export function reachablePlayerPos(from: Vec2, to: Vec2, travelTime: number): Vec2 {
+export function reachablePlayerPos(from: Vec2, to: Vec2, travelTime: number, speedFactor = 1): Vec2 {
   return reachablePosWithAcceleration(
-    from, to, PLAYER_MAX_SPEED_MS, PLAYER_ACCEL_MS2, travelTime, PLAYER_REACTION_TIME_S,
+    from, to, PLAYER_MAX_SPEED_MS * speedFactor, PLAYER_ACCEL_MS2 * speedFactor,
+    travelTime, PLAYER_REACTION_TIME_S,
   );
 }
 
-export function canAiReach(from: Vec2, to: Vec2, travelTime: number): boolean {
+export function canAiReach(from: Vec2, to: Vec2, travelTime: number, speedFactor = 1): boolean {
   return canReachWithAcceleration(
-    from, to, AI_MAX_SPEED_MS, AI_ACCEL_MS2, travelTime, AI_REACTION_TIME_S,
+    from, to, AI_MAX_SPEED_MS * speedFactor, AI_ACCEL_MS2 * speedFactor,
+    travelTime, AI_REACTION_TIME_S,
   );
 }
 
-export function reachableAiPos(from: Vec2, to: Vec2, travelTime: number): Vec2 {
+export function reachableAiPos(from: Vec2, to: Vec2, travelTime: number, speedFactor = 1): Vec2 {
   return reachablePosWithAcceleration(
-    from, to, AI_MAX_SPEED_MS, AI_ACCEL_MS2, travelTime, AI_REACTION_TIME_S,
+    from, to, AI_MAX_SPEED_MS * speedFactor, AI_ACCEL_MS2 * speedFactor,
+    travelTime, AI_REACTION_TIME_S,
   );
 }
 
@@ -166,12 +173,13 @@ function isInAiServiceBox(point: Vec2): boolean {
     && point.y >= netYM && point.y <= netYM + serviceBoxDepthM;
 }
 
-export function validateServe(playerPos: Vec2, target: Vec2): ShotValidation {
+export function validateServe(playerPos: Vec2, target: Vec2, maxServeSpeed = Infinity): ShotValidation {
   if (!isInAiServiceBox(target)) {
     return { valid: false, reason: 'out_of_bounds' };
   }
 
-  const speed = 20 + Math.random() * 8; // 20–28 m/s
+  // Fatigue caps serve pace, but a tired player can always spin one in
+  const speed = Math.min(20 + Math.random() * 8, Math.max(14, maxServeSpeed)); // 20–28 m/s fresh
 
   // Serve contact is overhead — use SERVE_HIT_HEIGHT for net clearance check
   if (!checkNetClearance(playerPos, target, speed, SERVE_HIT_HEIGHT)) {
@@ -199,7 +207,8 @@ export function validateServe(playerPos: Vec2, target: Vec2): ShotValidation {
 export function validateReturn(
   incoming: Shot,
   playerPos: Vec2,
-  target: Vec2
+  target: Vec2,
+  maxReturnSpeed = Infinity,
 ): ShotValidation {
   if (!isInBounds(target, 'ai_half')) {
     return { valid: false, reason: 'out_of_bounds' };
@@ -217,7 +226,12 @@ export function validateReturn(
     return { valid: false, reason: 'impossible_angle', deflectionAngle: deflAngle };
   }
 
-  const returnSpeed = computeReturnSpeed(incoming.speed, deflAngle);
+  // Fatigue caps power — a tired player can still block the ball back at
+  // BASE_SWING_POWER, they just can't hit big.
+  const returnSpeed = Math.min(
+    computeReturnSpeed(incoming.speed, deflAngle),
+    Math.max(BASE_SWING_POWER, maxReturnSpeed),
+  );
 
   if (!checkNetClearance(incoming.landing, target, returnSpeed)) {
     return { valid: false, reason: 'net_fault', deflectionAngle: deflAngle, returnSpeed };

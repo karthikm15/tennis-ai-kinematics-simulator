@@ -68,4 +68,13 @@ export interface GameState {
   servingPlayer: 'player' | 'ai';
   matchOver: boolean;
   matchStats: MatchStats;
+  // ── Energy / fatigue ──
+  playerEnergy: number;            // 0–100 stamina tank
+  aiEnergy: number;
+  playerWinded: boolean;           // true right after a hard hit — next swing is capped
+  aiWinded: boolean;
+  playerLastEffort: number | null; // energy spent on the player's most recent shot (run + swing)
+  aiLastEffort: number | null;
+  pendingPlayerRunCost: number;    // run cost charged on ball arrival, folded into effort on the swing
+  exhaustedLoser: 'player' | 'ai' | null; // point lost because fatigue made the ball unreachable
 }

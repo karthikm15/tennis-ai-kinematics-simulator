@@ -8,10 +8,19 @@ import {
   canAiReach, canPlayerReach,
   reachableAiPos, reachablePlayerPos,
   checkNetClearance,
+  computeDeflectionAngle, computeVzFromHeight,
+  PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS, HIT_HEIGHT,
 } from '../engine/kinematics';
 import { generateAiShot, generateAiServe, defaultAiPos, defaultPlayerPos } from '../engine/ai';
 import { canvasClickToCourt } from '../engine/court';
 import { initRLAgent, rlAgentShot, resetRLFrameBuffer, buildRLConfig, RLShotConfig } from '../engine/rl_agent';
+import {
+  MAX_ENERGY, clampEnergy, energySpeedFactor,
+  recoverWhileResting, recoverWhileTracking, recoverBetweenPoints,
+  runCost, swingCost, serveCost, isHardShot,
+  maxAffordableReturnSpeed, maxAffordableServeSpeed,
+  MIN_AI_SHOT_SPEED,
+} from '../engine/energy';
 
 // ── Module-level AI config (updated by hook when difficulty/style change) ─────
 
@@ -23,6 +32,28 @@ function _getAiShot(aiPos: Vec2, playerPos: Vec2, lastBall: Vec2): Shot {
     try { return rlAgentShot(aiPos, playerPos, lastBall, _rlConfig); } catch { /* fall through */ }
   }
   return generateAiShot(aiPos, playerPos);
+}
+
+// ── Energy helpers ────────────────────────────────────────────────────────────
+
+function distM(a: Vec2, b: Vec2): number {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function sub2(a: Vec2, b: Vec2): Vec2 {
+  return { x: a.x - b.x, y: a.y - b.y };
+}
+
+// Slow a shot down to what the hitter's tank can pay for. A slower ball
+// can't arrive earlier, so travel time only ever grows (loopier, more
+// attackable — exactly what a tired shot looks like).
+function clampShotPower(shot: Shot, maxSpeed: number): Shot {
+  if (shot.speed <= maxSpeed) return shot;
+  const speed      = Math.max(MIN_AI_SHOT_SPEED, maxSpeed);
+  const dist       = distM(shot.origin, shot.landing);
+  const travelTime = Math.max(dist / speed, shot.travelTime);
+  const hitHeight  = shot.hitHeight ?? HIT_HEIGHT;
+  return { ...shot, speed, travelTime, vz: computeVzFromHeight(hitHeight, travelTime) };
 }
 
 // ── Tennis scoring helpers ────────────────────────────────────────────────────
@@ -95,8 +126,20 @@ function makeInitialState(): GameState {
   const playerPos = defaultPlayerPos();
   const servingPlayer: 'player' | 'ai' = Math.random() < 0.5 ? 'player' : 'ai';
 
+  const energyFields = {
+    playerEnergy: MAX_ENERGY,
+    aiEnergy: MAX_ENERGY,
+    playerWinded: false,
+    aiWinded: false,
+    playerLastEffort: null,
+    aiLastEffort: null,
+    pendingPlayerRunCost: 0,
+    exhaustedLoser: null,
+  } as const;
+
   if (servingPlayer === 'ai') {
     const firstShot = generateAiServe(aiPos);
+    const cost = serveCost(firstShot.speed);
     return {
       phase: 'ai_hitting',
       ballPosition: firstShot.origin,
@@ -114,6 +157,10 @@ function makeInitialState(): GameState {
       servingPlayer,
       matchOver: false,
       matchStats: makeInitialStats(),
+      ...energyFields,
+      aiEnergy: clampEnergy(MAX_ENERGY - cost),
+      aiWinded: isHardShot(cost),
+      aiLastEffort: cost,
     };
   } else {
     return {
@@ -133,6 +180,7 @@ function makeInitialState(): GameState {
       servingPlayer,
       matchOver: false,
       matchStats: makeInitialStats(),
+      ...energyFields,
     };
   }
 }
@@ -162,6 +210,7 @@ function reducer(state: GameState, action: Action): GameState {
         pointResult: null,
         playerStartPos: state.playerPos,
         aiStartPos:     state.aiPos,
+        exhaustedLoser: null,
       };
     }
 
@@ -178,9 +227,18 @@ function reducer(state: GameState, action: Action): GameState {
       if (!state.currentShot) return state;
       const { currentShot, playerStartPos } = state;
       const isServe = state.rallyCount === 0;
+      const tt = currentShot.travelTime;
 
-      if (!isServe && !canPlayerReach(playerStartPos, currentShot.landing, currentShot.travelTime)) {
-        const stoppedAt = reachablePlayerPos(playerStartPos, currentShot.landing, currentShot.travelTime);
+      // Both players recover during the ball's flight: the AI rests after its
+      // hit, the player recovers more slowly while chasing the incoming ball.
+      let playerEnergy = recoverWhileTracking(state.playerEnergy, tt);
+      const aiEnergy   = recoverWhileResting(state.aiEnergy, tt);
+      const speedFactor = energySpeedFactor(playerEnergy);
+
+      if (!isServe && !canPlayerReach(playerStartPos, currentShot.landing, tt, speedFactor)) {
+        // If fresh legs would have gotten there, this point was lost to fatigue
+        const exhausted = canPlayerReach(playerStartPos, currentShot.landing, tt);
+        const stoppedAt = reachablePlayerPos(playerStartPos, currentShot.landing, tt, speedFactor);
         const { score, setWon } = advancePoint(state.tennisScore, 'ai');
         return {
           ...state,
@@ -192,8 +250,18 @@ function reducer(state: GameState, action: Action): GameState {
           pointResult: 'ai_wins',
           matchOver: setWon,
           matchStats: updateStats(state.matchStats, 'ai', state.rallyCount),
+          playerEnergy,
+          aiEnergy,
+          exhaustedLoser: exhausted ? 'player' : null,
         };
       }
+
+      // Charge the sprint to the ball now; it folds into the shot's total
+      // effort when the swing happens.
+      const rc = runCost(
+        distM(playerStartPos, currentShot.landing), tt, PLAYER_MAX_SPEED_MS * speedFactor,
+      );
+      playerEnergy = clampEnergy(playerEnergy - rc);
 
       return {
         ...state,
@@ -201,6 +269,9 @@ function reducer(state: GameState, action: Action): GameState {
         playerPos: currentShot.landing,
         ballPosition: currentShot.landing,
         animationProgress: 1,
+        playerEnergy,
+        aiEnergy,
+        pendingPlayerRunCost: rc,
       };
     }
 
@@ -218,6 +289,10 @@ function reducer(state: GameState, action: Action): GameState {
           matchStats: updateStats(state.matchStats, 'ai', state.rallyCount),
         };
       }
+      const sc = swingCost(
+        validation.returnSpeed ?? validation.returnShot!.speed,
+        validation.deflectionAngle ?? 0,
+      );
       return {
         ...state,
         phase: 'player_hitting',
@@ -228,10 +303,15 @@ function reducer(state: GameState, action: Action): GameState {
         rallyCount: state.rallyCount + 1,
         playerStartPos: state.playerPos,
         aiStartPos:     state.aiPos,
+        playerEnergy: clampEnergy(state.playerEnergy - sc),
+        playerWinded: isHardShot(sc),
+        playerLastEffort: state.pendingPlayerRunCost + sc,
+        pendingPlayerRunCost: 0,
       };
     }
 
     case 'PLAYER_SERVED': {
+      const sc = serveCost(action.shot.speed);
       return {
         ...state,
         phase: 'player_hitting',
@@ -241,6 +321,10 @@ function reducer(state: GameState, action: Action): GameState {
         rallyCount: 0,
         playerStartPos: state.playerPos,
         aiStartPos:     state.aiPos,
+        playerEnergy: clampEnergy(state.playerEnergy - sc),
+        playerWinded: isHardShot(sc),
+        playerLastEffort: sc,
+        pendingPlayerRunCost: 0,
       };
     }
 
@@ -248,9 +332,17 @@ function reducer(state: GameState, action: Action): GameState {
       if (!state.currentShot) return state;
       const { currentShot, aiStartPos } = state;
       const isServe = state.rallyCount === 0;
+      const tt = currentShot.travelTime;
 
-      if (!isServe && !canAiReach(aiStartPos, currentShot.landing, currentShot.travelTime)) {
-        const stoppedAt = reachableAiPos(aiStartPos, currentShot.landing, currentShot.travelTime);
+      // Mirror of AI_SHOT_LANDED: player rests after hitting, AI recovers
+      // more slowly while chasing the incoming ball.
+      const playerEnergy = recoverWhileResting(state.playerEnergy, tt);
+      let aiEnergy       = recoverWhileTracking(state.aiEnergy, tt);
+      const speedFactor  = energySpeedFactor(aiEnergy);
+
+      if (!isServe && !canAiReach(aiStartPos, currentShot.landing, tt, speedFactor)) {
+        const exhausted = canAiReach(aiStartPos, currentShot.landing, tt);
+        const stoppedAt = reachableAiPos(aiStartPos, currentShot.landing, tt, speedFactor);
         const { score, setWon } = advancePoint(state.tennisScore, 'player');
         return {
           ...state,
@@ -262,11 +354,27 @@ function reducer(state: GameState, action: Action): GameState {
           pointResult: 'player_wins',
           matchOver: setWon,
           matchStats: updateStats(state.matchStats, 'player', state.rallyCount),
+          playerEnergy,
+          aiEnergy,
+          exhaustedLoser: exhausted ? 'ai' : null,
         };
       }
 
       const newAiPos = currentShot.landing;
-      const nextShot = _getAiShot(newAiPos, state.playerPos, currentShot.landing);
+      const rc = runCost(distM(aiStartPos, newAiPos), tt, AI_MAX_SPEED_MS * speedFactor);
+      aiEnergy = clampEnergy(aiEnergy - rc);
+
+      // AI's reply is capped by what its tank can pay for right now
+      const rawShot  = _getAiShot(newAiPos, state.playerPos, currentShot.landing);
+      const nextShot = clampShotPower(rawShot, maxAffordableReturnSpeed(aiEnergy, state.aiWinded));
+      const deflAngle = computeDeflectionAngle(
+        sub2(currentShot.landing, currentShot.origin),
+        sub2(nextShot.landing, nextShot.origin),
+      );
+      const sc = swingCost(nextShot.speed, deflAngle);
+      aiEnergy = clampEnergy(aiEnergy - sc);
+      const aiWinded     = isHardShot(sc);
+      const aiLastEffort = rc + sc;
 
       if (!checkNetClearance(nextShot.origin, nextShot.landing, nextShot.speed)) {
         const { score, setWon } = advancePoint(state.tennisScore, 'player');
@@ -281,6 +389,10 @@ function reducer(state: GameState, action: Action): GameState {
           lastValidation: { valid: false, reason: 'net_fault' },
           matchOver: setWon,
           matchStats: updateStats(state.matchStats, 'player', state.rallyCount),
+          playerEnergy,
+          aiEnergy,
+          aiWinded,
+          aiLastEffort,
         };
       }
 
@@ -294,6 +406,10 @@ function reducer(state: GameState, action: Action): GameState {
         rallyCount: state.rallyCount + 1,
         playerStartPos: state.playerPos,
         aiStartPos:     newAiPos,
+        playerEnergy,
+        aiEnergy,
+        aiWinded,
+        aiLastEffort,
       };
     }
 
@@ -303,8 +419,27 @@ function reducer(state: GameState, action: Action): GameState {
       const servingPlayer: 'player' | 'ai' = state.servingPlayer === 'player' ? 'ai' : 'player';
       resetRLFrameBuffer();
 
+      // The ~25s between points restores a big chunk of both tanks and
+      // clears any winded state — fatigue only partially carries over.
+      const playerEnergy = recoverBetweenPoints(state.playerEnergy);
+      let aiEnergy       = recoverBetweenPoints(state.aiEnergy);
+
+      const energyReset = {
+        playerEnergy,
+        playerWinded: false,
+        aiWinded: false,
+        playerLastEffort: null,
+        aiLastEffort: null,
+        pendingPlayerRunCost: 0,
+        exhaustedLoser: null,
+      };
+
       if (servingPlayer === 'ai') {
-        const nextShot = generateAiServe(aiPos);
+        const nextShot = clampShotPower(
+          generateAiServe(aiPos), maxAffordableServeSpeed(aiEnergy, false),
+        );
+        const cost = serveCost(nextShot.speed);
+        aiEnergy = clampEnergy(aiEnergy - cost);
         return {
           ...state,
           phase: 'ai_hitting',
@@ -319,6 +454,10 @@ function reducer(state: GameState, action: Action): GameState {
           pointResult: null,
           rallyCount: 0,
           servingPlayer,
+          ...energyReset,
+          aiEnergy,
+          aiWinded: isHardShot(cost),
+          aiLastEffort: cost,
         };
       } else {
         return {
@@ -335,6 +474,8 @@ function reducer(state: GameState, action: Action): GameState {
           pointResult: null,
           rallyCount: 0,
           servingPlayer,
+          ...energyReset,
+          aiEnergy,
         };
       }
     }
@@ -428,7 +569,8 @@ export function useGameState(difficulty: Difficulty = 'medium', style: PlayStyle
     if (state.phase === 'awaiting_serve') {
       const target = canvasClickToCourt(canvasPx.x, canvasPx.y);
       if (target.x < 0) return;
-      const validation = validateServe(state.playerPos, target);
+      const maxServe   = maxAffordableServeSpeed(state.playerEnergy, state.playerWinded);
+      const validation = validateServe(state.playerPos, target, maxServe);
       if (validation.valid && validation.returnShot) {
         setServeError(null);
         dispatch({ type: 'PLAYER_SERVED', shot: validation.returnShot });
@@ -440,7 +582,8 @@ export function useGameState(difficulty: Difficulty = 'medium', style: PlayStyle
 
     if (state.phase !== 'awaiting_input' || !state.currentShot) return;
     const target     = canvasClickToCourt(canvasPx.x, canvasPx.y);
-    const validation = validateReturn(state.currentShot, state.playerPos, target);
+    const maxReturn  = maxAffordableReturnSpeed(state.playerEnergy, state.playerWinded);
+    const validation = validateReturn(state.currentShot, state.playerPos, target, maxReturn);
 
     if (target.x >= 0) {
       const record: ShotRecord = {

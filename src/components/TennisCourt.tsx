@@ -9,6 +9,7 @@ import {
   PLAYER_MAX_SPEED_MS, AI_MAX_SPEED_MS,
   PLAYER_ACCEL_MS2, AI_ACCEL_MS2, reachableDistAccel,
 } from '../engine/kinematics';
+import { energySpeedFactor } from '../engine/energy';
 
 interface Props {
   state: GameState;
@@ -541,13 +542,17 @@ export default function TennisCourt({ state, handleCanvasClick, serveError }: Pr
     if (inFlight && shot) {
       if (state.phase === 'ai_hitting') {
         // Player runs toward ball's landing; AI stands still (just hit)
+        const pf = energySpeedFactor(state.playerEnergy);
         visualPlayerPos = computeRunningPos(
-          state.playerStartPos, shot.landing, PLAYER_MAX_SPEED_MS, PLAYER_ACCEL_MS2, shot.travelTime, prog,
+          state.playerStartPos, shot.landing,
+          PLAYER_MAX_SPEED_MS * pf, PLAYER_ACCEL_MS2 * pf, shot.travelTime, prog,
         );
       } else if (state.phase === 'player_hitting') {
         // AI runs toward ball's landing; player stands still (just hit)
+        const af = energySpeedFactor(state.aiEnergy);
         visualAiPos = computeRunningPos(
-          state.aiStartPos, shot.landing, AI_MAX_SPEED_MS, AI_ACCEL_MS2, shot.travelTime, prog,
+          state.aiStartPos, shot.landing,
+          AI_MAX_SPEED_MS * af, AI_ACCEL_MS2 * af, shot.travelTime, prog,
         );
       }
     }
@@ -619,10 +624,13 @@ export default function TennisCourt({ state, handleCanvasClick, serveError }: Pr
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
       const isAiWin  = state.pointResult === 'ai_wins';
       const reason   = state.lastValidation?.reason;
+      const exhausted = state.exhaustedLoser;
       const line1    = isAiWin
-        ? (reason === 'out_of_bounds' ? 'OUT' : reason === 'net_fault' ? 'NET FAULT' : reason === 'impossible_angle' ? 'BAD ANGLE' : 'UNREACHABLE — AI wins')
-        : (reason === 'net_fault' ? 'AI NET FAULT' : 'WINNER!');
-      const line2    = isAiWin ? 'AI wins the point' : (reason === 'net_fault' ? 'AI clipped the net' : 'Player wins the point');
+        ? (exhausted === 'player' ? 'EXHAUSTED' : reason === 'out_of_bounds' ? 'OUT' : reason === 'net_fault' ? 'NET FAULT' : reason === 'impossible_angle' ? 'BAD ANGLE' : 'UNREACHABLE — AI wins')
+        : (exhausted === 'ai' ? 'AI EXHAUSTED' : reason === 'net_fault' ? 'AI NET FAULT' : 'WINNER!');
+      const line2    = isAiWin
+        ? (exhausted === 'player' ? 'No legs left to chase it down' : 'AI wins the point')
+        : (exhausted === 'ai' ? 'You ran the AI into the ground' : reason === 'net_fault' ? 'AI clipped the net' : 'Player wins the point');
       ctx.textAlign  = 'center';
       ctx.textBaseline = 'middle';
       ctx.font = 'bold 32px sans-serif';
