@@ -1,11 +1,52 @@
+import { useState, useEffect } from 'react';
 import TennisCourt from './components/TennisCourt';
 import ShotInfo from './components/ShotInfo';
 import ScoreBoard from './components/ScoreBoard';
 import PlayerProfile from './components/PlayerProfile';
+import PreMatchScreen from './components/PreMatchScreen';
+import MatchStatsScreen from './components/MatchStatsScreen';
 import { useGameState } from './hooks/useGameState';
+import { Difficulty, PlayStyle } from './types';
+
+type AppPhase = 'pre_match' | 'playing' | 'set_over';
 
 export default function App() {
-  const { state, handleCanvasClick, serveError } = useGameState();
+  const [appPhase, setAppPhase]     = useState<AppPhase>('pre_match');
+  const [difficulty, setDifficulty] = useState<Difficulty>('medium');
+  const [style, setStyle]           = useState<PlayStyle>('balanced');
+
+  const { state, handleCanvasClick, serveError, resetMatch } = useGameState(difficulty, style);
+
+  // When match ends, wait for the point-over animation then show stats
+  useEffect(() => {
+    if (!state.matchOver || appPhase !== 'playing') return;
+    const id = setTimeout(() => setAppPhase('set_over'), 3000);
+    return () => clearTimeout(id);
+  }, [state.matchOver, appPhase]);
+
+  if (appPhase === 'pre_match') {
+    return (
+      <PreMatchScreen
+        difficulty={difficulty}
+        style={style}
+        onDifficultyChange={setDifficulty}
+        onStyleChange={setStyle}
+        onStart={() => { resetMatch(); setAppPhase('playing'); }}
+      />
+    );
+  }
+
+  if (appPhase === 'set_over') {
+    return (
+      <MatchStatsScreen
+        tennisScore={state.tennisScore}
+        matchStats={state.matchStats}
+        difficulty={difficulty}
+        style={style}
+        onPlayAgain={() => setAppPhase('pre_match')}
+      />
+    );
+  }
 
   return (
     <div style={{
@@ -42,6 +83,9 @@ export default function App() {
         }}>
           Tennis AI · Kinematics Simulator
         </span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <MatchBadge difficulty={difficulty} style={style} />
+        </div>
       </div>
 
       {/* Main layout */}
@@ -56,7 +100,6 @@ export default function App() {
         {/* Court */}
         <div style={{ flex: '1 1 auto', minWidth: 0 }}>
           <TennisCourt state={state} handleCanvasClick={handleCanvasClick} serveError={serveError} />
-          {/* Court labels */}
           <div style={{
             display: 'flex',
             justifyContent: 'space-between',
@@ -75,7 +118,11 @@ export default function App() {
 
         {/* Side panel */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', width: 240, flexShrink: 0 }}>
-          <ScoreBoard score={state.score} rallyCount={state.rallyCount} />
+          <ScoreBoard
+            tennisScore={state.tennisScore}
+            rallyCount={state.rallyCount}
+            servingPlayer={state.servingPlayer}
+          />
           <ShotInfo
             phase={state.phase}
             currentShot={state.currentShot}
@@ -85,6 +132,34 @@ export default function App() {
           <Legend />
         </div>
       </div>
+    </div>
+  );
+}
+
+function MatchBadge({ difficulty, style }: { difficulty: Difficulty; style: PlayStyle }) {
+  const diffColor: Record<Difficulty, string> = {
+    easy: '#4ade80', medium: '#f59e0b', hard: '#f97316', expert: '#f87171',
+  };
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <span style={{
+        background: `${diffColor[difficulty]}18`,
+        color: diffColor[difficulty],
+        fontSize: 11, fontWeight: 600,
+        padding: '3px 8px', borderRadius: 20,
+        letterSpacing: '0.05em', textTransform: 'capitalize',
+      }}>
+        {difficulty}
+      </span>
+      <span style={{
+        background: 'rgba(148,163,184,0.1)',
+        color: '#94a3b8',
+        fontSize: 11, fontWeight: 600,
+        padding: '3px 8px', borderRadius: 20,
+        letterSpacing: '0.05em', textTransform: 'capitalize',
+      }}>
+        {style}
+      </span>
     </div>
   );
 }

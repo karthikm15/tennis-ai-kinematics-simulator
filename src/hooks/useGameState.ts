@@ -1,5 +1,8 @@
 import { useReducer, useEffect, useRef, useState } from 'react';
-import { GameState, GamePhase, Shot, ShotValidation, Vec2, ShotRecord, ValidationReason } from '../types';
+import {
+  GameState, GamePhase, Shot, ShotValidation, Vec2, ShotRecord, ValidationReason,
+  Difficulty, PlayStyle, TennisScore, MatchStats,
+} from '../types';
 import {
   validateReturn, validateServe,
   canAiReach, canPlayerReach,
@@ -8,16 +11,68 @@ import {
 } from '../engine/kinematics';
 import { generateAiShot, generateAiServe, defaultAiPos, defaultPlayerPos } from '../engine/ai';
 import { canvasClickToCourt } from '../engine/court';
-import { initRLAgent, rlAgentShot, resetRLFrameBuffer } from '../engine/rl_agent';
+import { initRLAgent, rlAgentShot, resetRLFrameBuffer, buildRLConfig, RLShotConfig } from '../engine/rl_agent';
 
-// Module-level flag: flips to true once weights are fetched
-let _rlReady = false;
+// ── Module-level AI config (updated by hook when difficulty/style change) ─────
+
+let _rlReady  = false;
+let _rlConfig: RLShotConfig = buildRLConfig('medium', 'balanced');
 
 function _getAiShot(aiPos: Vec2, playerPos: Vec2, lastBall: Vec2): Shot {
   if (_rlReady) {
-    try { return rlAgentShot(aiPos, playerPos, lastBall); } catch { /* fall through */ }
+    try { return rlAgentShot(aiPos, playerPos, lastBall, _rlConfig); } catch { /* fall through */ }
   }
   return generateAiShot(aiPos, playerPos);
+}
+
+// ── Tennis scoring helpers ────────────────────────────────────────────────────
+
+function makeInitialScore(): TennisScore {
+  return { pointsInGame: { player: 0, ai: 0 }, games: { player: 0, ai: 0 }, isTiebreak: false };
+}
+
+function makeInitialStats(): MatchStats {
+  return { totalPoints: { player: 0, ai: 0 }, longestRally: 0, rallyTotal: 0, rallyCount: 0 };
+}
+
+function advancePoint(
+  score: TennisScore,
+  winner: 'player' | 'ai',
+): { score: TennisScore; setWon: boolean } {
+  const newPts = { ...score.pointsInGame, [winner]: score.pointsInGame[winner] + 1 };
+  const pw = newPts[winner];
+  const pl = newPts[winner === 'player' ? 'ai' : 'player'];
+
+  const gameWon = score.isTiebreak ? (pw >= 7 && pw - pl >= 2) : (pw >= 4 && pw - pl >= 2);
+
+  if (!gameWon) {
+    return { score: { ...score, pointsInGame: newPts }, setWon: false };
+  }
+
+  const newGames = { ...score.games, [winner]: score.games[winner] + 1 };
+  const gw = newGames[winner];
+  const gl = newGames[winner === 'player' ? 'ai' : 'player'];
+
+  const setWon = score.isTiebreak || (gw >= 6 && gw - gl >= 2);
+  const goTiebreak = !score.isTiebreak && newGames.player === 6 && newGames.ai === 6;
+
+  return {
+    score: {
+      pointsInGame: { player: 0, ai: 0 },
+      games: newGames,
+      isTiebreak: !setWon && goTiebreak,
+    },
+    setWon,
+  };
+}
+
+function updateStats(stats: MatchStats, winner: 'player' | 'ai', rally: number): MatchStats {
+  return {
+    totalPoints: { ...stats.totalPoints, [winner]: stats.totalPoints[winner] + 1 },
+    longestRally: Math.max(stats.longestRally, rally),
+    rallyTotal:   stats.rallyTotal + rally,
+    rallyCount:   stats.rallyCount + 1,
+  };
 }
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -30,7 +85,8 @@ type Action =
   | { type: 'PLAYER_CLICKED'; validation: ShotValidation }
   | { type: 'PLAYER_SERVED'; shot: Shot }
   | { type: 'PLAYER_SHOT_LANDED' }
-  | { type: 'RESET_POINT' };
+  | { type: 'RESET_POINT' }
+  | { type: 'RESET_MATCH' };
 
 // ── Initial state ─────────────────────────────────────────────────────────────
 
@@ -50,12 +106,14 @@ function makeInitialState(): GameState {
       aiStartPos:     aiPos,
       currentShot: firstShot,
       lastValidation: null,
-      score: { player: 0, ai: 0 },
+      tennisScore: makeInitialScore(),
       rallyCount: 0,
       animationProgress: 0,
       pointResult: null,
       shotHistory: [],
       servingPlayer,
+      matchOver: false,
+      matchStats: makeInitialStats(),
     };
   } else {
     return {
@@ -67,12 +125,14 @@ function makeInitialState(): GameState {
       aiStartPos:     aiPos,
       currentShot: null,
       lastValidation: null,
-      score: { player: 0, ai: 0 },
+      tennisScore: makeInitialScore(),
       rallyCount: 0,
       animationProgress: 0,
       pointResult: null,
       shotHistory: [],
       servingPlayer,
+      matchOver: false,
+      matchStats: makeInitialStats(),
     };
   }
 }
@@ -85,6 +145,11 @@ function lerp(a: Vec2, b: Vec2, t: number): Vec2 {
 
 function reducer(state: GameState, action: Action): GameState {
   switch (action.type) {
+
+    case 'RESET_MATCH': {
+      resetRLFrameBuffer();
+      return makeInitialState();
+    }
 
     case 'INIT_AI_SHOT': {
       return {
@@ -112,21 +177,21 @@ function reducer(state: GameState, action: Action): GameState {
     case 'AI_SHOT_LANDED': {
       if (!state.currentShot) return state;
       const { currentShot, playerStartPos } = state;
-
-      // rallyCount === 0 means this is the serve — receiver always gets to it.
-      // Movement checks only apply once the rally is under way (shot 2+).
       const isServe = state.rallyCount === 0;
 
       if (!isServe && !canPlayerReach(playerStartPos, currentShot.landing, currentShot.travelTime)) {
         const stoppedAt = reachablePlayerPos(playerStartPos, currentShot.landing, currentShot.travelTime);
+        const { score, setWon } = advancePoint(state.tennisScore, 'ai');
         return {
           ...state,
           phase: 'point_over',
           playerPos: stoppedAt,
           ballPosition: currentShot.landing,
           animationProgress: 1,
-          score: { ...state.score, ai: state.score.ai + 1 },
+          tennisScore: score,
           pointResult: 'ai_wins',
+          matchOver: setWon,
+          matchStats: updateStats(state.matchStats, 'ai', state.rallyCount),
         };
       }
 
@@ -142,12 +207,15 @@ function reducer(state: GameState, action: Action): GameState {
     case 'PLAYER_CLICKED': {
       const { validation } = action;
       if (!validation.valid) {
+        const { score, setWon } = advancePoint(state.tennisScore, 'ai');
         return {
           ...state,
           phase: 'point_over',
           lastValidation: validation,
-          score: { ...state.score, ai: state.score.ai + 1 },
+          tennisScore: score,
           pointResult: 'ai_wins',
+          matchOver: setWon,
+          matchStats: updateStats(state.matchStats, 'ai', state.rallyCount),
         };
       }
       return {
@@ -158,7 +226,6 @@ function reducer(state: GameState, action: Action): GameState {
         animationProgress: 0,
         lastValidation: validation,
         rallyCount: state.rallyCount + 1,
-        // Player stays at landing (they just hit); AI starts running from here
         playerStartPos: state.playerPos,
         aiStartPos:     state.aiPos,
       };
@@ -180,37 +247,40 @@ function reducer(state: GameState, action: Action): GameState {
     case 'PLAYER_SHOT_LANDED': {
       if (!state.currentShot) return state;
       const { currentShot, aiStartPos } = state;
-
-      // rallyCount === 0 means this is the player's serve — AI always returns it.
       const isServe = state.rallyCount === 0;
 
       if (!isServe && !canAiReach(aiStartPos, currentShot.landing, currentShot.travelTime)) {
         const stoppedAt = reachableAiPos(aiStartPos, currentShot.landing, currentShot.travelTime);
+        const { score, setWon } = advancePoint(state.tennisScore, 'player');
         return {
           ...state,
           phase: 'point_over',
           aiPos: stoppedAt,
           ballPosition: currentShot.landing,
           animationProgress: 1,
-          score: { ...state.score, player: state.score.player + 1 },
+          tennisScore: score,
           pointResult: 'player_wins',
+          matchOver: setWon,
+          matchStats: updateStats(state.matchStats, 'player', state.rallyCount),
         };
       }
 
-      // AI reached the ball — generate return shot, check net clearance
-      const newAiPos  = currentShot.landing;
-      const nextShot  = _getAiShot(newAiPos, state.playerPos, currentShot.landing);
+      const newAiPos = currentShot.landing;
+      const nextShot = _getAiShot(newAiPos, state.playerPos, currentShot.landing);
 
       if (!checkNetClearance(nextShot.origin, nextShot.landing, nextShot.speed)) {
+        const { score, setWon } = advancePoint(state.tennisScore, 'player');
         return {
           ...state,
           phase: 'point_over',
           aiPos: newAiPos,
           ballPosition: newAiPos,
           animationProgress: 1,
-          score: { ...state.score, player: state.score.player + 1 },
+          tennisScore: score,
           pointResult: 'player_wins',
           lastValidation: { valid: false, reason: 'net_fault' },
+          matchOver: setWon,
+          matchStats: updateStats(state.matchStats, 'player', state.rallyCount),
         };
       }
 
@@ -230,8 +300,8 @@ function reducer(state: GameState, action: Action): GameState {
     case 'RESET_POINT': {
       const aiPos     = defaultAiPos();
       const playerPos = defaultPlayerPos();
-      // Alternate server each point
       const servingPlayer: 'player' | 'ai' = state.servingPlayer === 'player' ? 'ai' : 'player';
+      resetRLFrameBuffer();
 
       if (servingPlayer === 'ai') {
         const nextShot = generateAiServe(aiPos);
@@ -280,7 +350,7 @@ function reducer(state: GameState, action: Action): GameState {
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
-export function useGameState() {
+export function useGameState(difficulty: Difficulty = 'medium', style: PlayStyle = 'balanced') {
   const [state, dispatch] = useReducer(reducer, undefined, makeInitialState);
   const [serveError, setServeError] = useState<ValidationReason | null>(null);
   const serveErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -289,6 +359,11 @@ export function useGameState() {
   useEffect(() => {
     initRLAgent().then(() => { _rlReady = true; }).catch(console.error);
   }, []);
+
+  // Sync AI config when difficulty/style change
+  useEffect(() => {
+    _rlConfig = buildRLConfig(difficulty, style);
+  }, [difficulty, style]);
 
   // Reset RL frame history at the start of every new point
   useEffect(() => {
@@ -336,12 +411,12 @@ export function useGameState() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.phase, state.currentShot?.origin, state.currentShot?.landing]);
 
-  // Auto-reset after point_over
+  // Auto-reset after point_over (skip if match is over — App handles that transition)
   useEffect(() => {
-    if (state.phase !== 'point_over') return;
+    if (state.phase !== 'point_over' || state.matchOver) return;
     const id = setTimeout(() => dispatch({ type: 'RESET_POINT' }), 2500);
     return () => clearTimeout(id);
-  }, [state.phase]);
+  }, [state.phase, state.matchOver]);
 
   function showServeError(reason: ValidationReason) {
     if (serveErrorTimer.current) clearTimeout(serveErrorTimer.current);
@@ -352,7 +427,7 @@ export function useGameState() {
   function handleCanvasClick(canvasPx: Vec2) {
     if (state.phase === 'awaiting_serve') {
       const target = canvasClickToCourt(canvasPx.x, canvasPx.y);
-      if (target.x < 0) return; // above horizon
+      if (target.x < 0) return;
       const validation = validateServe(state.playerPos, target);
       if (validation.valid && validation.returnShot) {
         setServeError(null);
@@ -367,7 +442,6 @@ export function useGameState() {
     const target     = canvasClickToCourt(canvasPx.x, canvasPx.y);
     const validation = validateReturn(state.currentShot, state.playerPos, target);
 
-    // Record this attempt (valid or not) — skip completely off-court clicks (above horizon)
     if (target.x >= 0) {
       const record: ShotRecord = {
         ballLandX:      state.currentShot.landing.x,
@@ -385,5 +459,9 @@ export function useGameState() {
     dispatch({ type: 'PLAYER_CLICKED', validation });
   }
 
-  return { state, handleCanvasClick, serveError };
+  function resetMatch() {
+    dispatch({ type: 'RESET_MATCH' });
+  }
+
+  return { state, handleCanvasClick, serveError, resetMatch };
 }

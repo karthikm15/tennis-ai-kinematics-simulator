@@ -13,7 +13,7 @@
  *   const nextShot = rlAgentShot(newAiPos, state.playerPos, gameState);
  */
 
-import { Vec2, Shot } from '../types';
+import { Vec2, Shot, Difficulty, PlayStyle } from '../types';
 import { COURT } from './court';
 import { computeVz } from './kinematics';
 
@@ -36,17 +36,50 @@ interface ModelWeights {
   actor_log_std?: number[];
 }
 
+// ── Shot config ───────────────────────────────────────────────────────────────
+
+export interface RLShotConfig {
+  speed: number;         // ball speed m/s
+  minTravelTime: number; // minimum flight time (reaction window)
+  blendToPlayer: number; // 0 = raw RL output, 1 = always aim at player
+  xMargin: number;       // keep shots this far from sidelines
+  nearY: number;         // minimum landing depth from player baseline
+  netBuffer: number;     // keep shots this far from net
+}
+
+const BASE_CONFIGS: Record<Difficulty, RLShotConfig> = {
+  easy:   { speed: 6.5,  minTravelTime: 2.4,  blendToPlayer: 0.55, xMargin: 1.5,  nearY: 2.2, netBuffer: 2.0 },
+  medium: { speed: 8.5,  minTravelTime: 1.6,  blendToPlayer: 0.35, xMargin: 0.9,  nearY: 2.2, netBuffer: 2.0 },
+  hard:   { speed: 10.5, minTravelTime: 1.0,  blendToPlayer: 0.10, xMargin: 0.4,  nearY: 2.2, netBuffer: 2.0 },
+  expert: { speed: 13.0, minTravelTime: 0.65, blendToPlayer: 0.0,  xMargin: 0.15, nearY: 1.5, netBuffer: 2.0 },
+};
+
+const STYLE_DELTAS: Record<PlayStyle, { speed: number; time: number; blend: number; nearY: number }> = {
+  aggressive: { speed:  1.5, time: -0.25, blend: -0.20, nearY: 1.5 },
+  balanced:   { speed:  0.0, time:  0.0,  blend:  0.0,  nearY: 2.2 },
+  consistent: { speed: -1.0, time:  0.4,  blend:  0.15, nearY: 4.5 },
+};
+
+export function buildRLConfig(difficulty: Difficulty, style: PlayStyle): RLShotConfig {
+  const base  = BASE_CONFIGS[difficulty];
+  const delta = STYLE_DELTAS[style];
+  return {
+    speed:         Math.max(5.0, base.speed + delta.speed),
+    minTravelTime: Math.max(0.5, base.minTravelTime + delta.time),
+    blendToPlayer: Math.max(0.0, Math.min(0.8, base.blendToPlayer + delta.blend)),
+    xMargin:       base.xMargin,
+    nearY:         delta.nearY,
+    netBuffer:     base.netBuffer,
+  };
+}
+
+const DEFAULT_CONFIG: RLShotConfig = buildRLConfig('medium', 'balanced');
+
 // ── Module state ──────────────────────────────────────────────────────────────
 
 let _weights: ModelWeights | null = null;
 const N_FRAMES = 3;
 const N_FEATURES = 8;
-const PLAYER_FRIENDLY_X_MARGIN = 0.9;
-const PLAYER_FRIENDLY_NEAR_Y = 2.2;
-const PLAYER_FRIENDLY_NET_BUFFER = 2.0;
-const LANDING_BLEND_TO_PLAYER = 0.35;
-const RALLY_SPEED_MS = 8.5;
-const MIN_RALLY_TRAVEL_TIME = 1.6;
 const STOCHASTIC_POLICY_TEMPERATURE = 0.75;
 const STOCHASTIC_MEAN_CLAMP = 0.95;
 // Ring buffer for frame stacking
@@ -157,6 +190,7 @@ export function rlAgentShot(
   aiPos:     Vec2,
   playerPos: Vec2,
   lastBall:  Vec2,
+  config:    RLShotConfig = DEFAULT_CONFIG,
   aiVel:     Vec2 = { x: 0, y: 0 },
 ): Shot {
   if (!_weights) {
@@ -185,24 +219,23 @@ export function rlAgentShot(
   const landX = margin + ((action[0] + 1) / 2) * (width - 2 * margin);
   const landY = margin + ((action[1] + 1) / 2) * (net_y - net_margin - margin);
 
-  const easierX = landX * (1 - LANDING_BLEND_TO_PLAYER) + playerPos.x * LANDING_BLEND_TO_PLAYER;
-  const easierY = landY * (1 - LANDING_BLEND_TO_PLAYER) + playerPos.y * LANDING_BLEND_TO_PLAYER;
+  const blendedX = landX * (1 - config.blendToPlayer) + playerPos.x * config.blendToPlayer;
+  const blendedY = landY * (1 - config.blendToPlayer) + playerPos.y * config.blendToPlayer;
 
   const landing: Vec2 = {
-    x: Math.max(PLAYER_FRIENDLY_X_MARGIN, Math.min(width - PLAYER_FRIENDLY_X_MARGIN, easierX)),
-    y: Math.max(PLAYER_FRIENDLY_NEAR_Y, Math.min(net_y - PLAYER_FRIENDLY_NET_BUFFER, easierY)),
+    x: Math.max(config.xMargin, Math.min(width - config.xMargin, blendedX)),
+    y: Math.max(config.nearY,   Math.min(net_y - config.netBuffer, blendedY)),
   };
 
   const dx = landing.x - aiPos.x;
   const dy = landing.y - aiPos.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
-  const speed = RALLY_SPEED_MS;
-  const travelTime = Math.max(dist / speed, MIN_RALLY_TRAVEL_TIME);
+  const travelTime = Math.max(dist / config.speed, config.minTravelTime);
 
   return {
     origin:     aiPos,
     landing,
-    speed,
+    speed:      config.speed,
     spinType:   'flat',
     travelTime,
     vz:         computeVz(travelTime),

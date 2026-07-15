@@ -1,6 +1,9 @@
 import type { ShotRecord } from './engine/playerProfile';
 export type { ShotRecord };
 
+export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert';
+export type PlayStyle  = 'aggressive' | 'balanced' | 'consistent';
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -35,19 +38,34 @@ export type GamePhase =
   | 'player_hitting'
   | 'point_over';
 
+export interface TennisScore {
+  pointsInGame: { player: number; ai: number };
+  games:        { player: number; ai: number };
+  isTiebreak:   boolean;
+}
+
+export interface MatchStats {
+  totalPoints: { player: number; ai: number };
+  longestRally: number;
+  rallyTotal:   number;
+  rallyCount:   number;
+}
+
 export interface GameState {
   phase: GamePhase;
-  ballPosition: Vec2;       // court meters (lerped during flight)
+  ballPosition: Vec2;
   playerPos: Vec2;
   aiPos: Vec2;
-  playerStartPos: Vec2;     // where player was when current shot began (for run animation)
-  aiStartPos: Vec2;         // where AI was when current shot began (for run animation)
+  playerStartPos: Vec2;
+  aiStartPos: Vec2;
   currentShot: Shot | null;
   lastValidation: ShotValidation | null;
-  score: { player: number; ai: number };
+  tennisScore: TennisScore;
   rallyCount: number;
-  animationProgress: number; // 0..1
+  animationProgress: number;
   pointResult: 'player_wins' | 'ai_wins' | null;
   shotHistory: ShotRecord[];
   servingPlayer: 'player' | 'ai';
+  matchOver: boolean;
+  matchStats: MatchStats;
 }
